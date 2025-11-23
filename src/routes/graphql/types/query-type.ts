@@ -1,4 +1,5 @@
 import {GraphQLList, GraphQLNonNull, GraphQLObjectType} from "graphql/index.js";
+import { parseResolveInfo } from 'graphql-parse-resolve-info';
 import {MemberType, MemberTypeId} from "./member.js";
 import {UserType} from "./user.js";
 import {UUIDType} from "./uuid.js";
@@ -10,7 +11,7 @@ export const QueryType = new GraphQLObjectType({
   fields: {
     memberTypes: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(MemberType))),
-      resolve: (_, __, context) => context.prisma.memberType.findMany(),
+      resolve: async (_, __, context) => context.prisma.memberType.findMany(),
     },
     memberType: {
       type: MemberType,
@@ -19,7 +20,55 @@ export const QueryType = new GraphQLObjectType({
     },
     users: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserType))),
-      resolve: (_, __, context) => context.prisma.user.findMany(),
+      resolve: async (_, __, { prisma, loaders }, info) => {
+        const parsedInfo = parseResolveInfo(info);
+        if (!parsedInfo) {
+          const users = await prisma.user.findMany();
+          for (const user of users) {
+            loaders.userLoader.prime(user.id, user);
+          }
+          return users;
+        }
+
+        const userFields = parsedInfo.fieldsByTypeName?.User;
+        const needUserSubscribedTo = userFields && 'userSubscribedTo' in userFields;
+        const needSubscribedToUser = userFields && 'subscribedToUser' in userFields;
+        const include: any = {};
+        if (needUserSubscribedTo) {
+          include.userSubscribedTo = { include: { author: true } };
+        }
+        if (needSubscribedToUser) {
+          include.subscribedToUser = { include: { subscriber: true } };
+        }
+
+        const users = await prisma.user.findMany({
+          include: Object.keys(include).length ? include : undefined,
+        });
+
+        for (const user of users) {
+          loaders.userLoader.prime(user.id, user);
+          if (needUserSubscribedTo && user.userSubscribedTo) {
+            for (const sub of user.userSubscribedTo) {
+              loaders.userLoader.prime(sub.author.id, sub.author);
+            }
+            loaders.userSubscribedToLoader.prime(
+              user.id,
+              user.userSubscribedTo.map((s) => s.author)
+            );
+          }
+
+          if (needSubscribedToUser && user.subscribedToUser) {
+            for (const sub of user.subscribedToUser) {
+              loaders.userLoader.prime(sub.subscriber.id, sub.subscriber);
+            }
+            loaders.subscribedToUserLoader.prime(
+              user.id,
+              user.subscribedToUser.map((s) => s.subscriber)
+            );
+          }
+        }
+        return users;
+      },
     },
     user: {
       type: UserType,

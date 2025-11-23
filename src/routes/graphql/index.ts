@@ -4,6 +4,7 @@ import {graphql, GraphQLSchema, parse, validate,} from 'graphql';
 import {QueryType} from "./types/query-type.js";
 import {MutationType} from "./types/mutation-type.js";
 import depthLimit from "graphql-depth-limit";
+import { createLoaders } from "./data-loaders/loaders.js";
 
 const schema = new GraphQLSchema({ query: QueryType, mutation: MutationType });
 
@@ -27,11 +28,18 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         return { errors };
       }
 
+      const loaders = createLoaders(prisma);
+
+      const contextValue = {
+        prisma,
+        loaders,
+      };
+
       return await graphql({
         schema,
         source: query,
         variableValues: variables,
-        contextValue: { prisma },
+        contextValue,
       });
     },
   });
